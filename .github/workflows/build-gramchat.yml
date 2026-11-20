@@ -1,0 +1,66 @@
+name: Build Gramchat IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tg-app/**"
+      - ".github/workflows/build-gramchat.yml"
+
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      TG_API_ID: ${{ secrets.TG_API_ID }}
+      TG_API_HASH: ${{ secrets.TG_API_HASH }}
+    defaults:
+      run:
+        working-directory: tg-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          if [ -z "$TG_API_ID" ] || [ -z "$TG_API_HASH" ]; then
+            echo "::error::TG_API_ID va TG_API_HASH secrets qo'shilmagan (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+
+      - name: Write API config
+        run: |
+          printf 'enum Config {\n    static let apiId = %s\n    static let apiHash = "%s"\n}\n' "$TG_API_ID" "$TG_API_HASH" > Sources/Config.swift
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project Gramchat.xcodeproj -scheme Gramchat
+
+      - name: Build app (unsigned)
+        run: |
+          xcodebuild build \
+            -project Gramchat.xcodeproj \
+            -scheme Gramchat \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package IPA
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -name "*.app" -maxdepth 1 | head -n 1)
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r Gramchat.ipa Payload
+          rm -rf Payload
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gramchat-ipa
+          path: tg-app/Gramchat.ipa
